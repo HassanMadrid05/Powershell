@@ -249,7 +249,7 @@ try {
 
 "@
     Write-Host $banner -ForegroundColor Cyan
-    Write-Host "                       by Cybersoc Scitum (Version Unificada)" -ForegroundColor White
+    Write-Host "                       by Hassan Madrid https://github.com/HassanMadrid05/Powershell (Version Unificada)" -ForegroundColor White
     Write-Host
 
     Write-Host "Iniciando recopilacion de datos..." -ForegroundColor Yellow
