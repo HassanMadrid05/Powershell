@@ -29,14 +29,6 @@ Existen dos versiones del script para diferentes escenarios.
 Opción 1: Script Completo (Recomendado)
 Esta es la versión robusta que ofrece todas las funcionalidades, incluyendo diferentes modos de ejecución y la capacidad de auto-elevar sus privilegios si no se ejecuta como administrador.
 
-Guarda el código en un archivo llamado AnalyzerSysPro_v3.ps1.
-
-Abre una consola de PowerShell.
-
-Navega hasta la carpeta donde guardaste el archivo (ej. cd C:\Users\TuUsuario\Desktop).
-
-Ejecuta uno de los siguientes comandos según lo que necesites:
-
 Análisis Completo en Pantalla:
 
 .\AnalyzerSysPro_v3.ps1
