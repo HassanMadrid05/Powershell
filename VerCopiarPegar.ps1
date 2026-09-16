@@ -13,13 +13,9 @@ function Get-ActiveScheduledTasks {
 
 # --- FUNCIONES SHOW (Para formatear y mostrar datos) ---
 function Show-SystemInfo {
-    param($compInfo)
+    param($compInfo, $cpuInfo)
     Write-Host "`n--- 1. Informacion General del Sistema ---" -ForegroundColor Green
-    $procInfo = Get-CimInstance Win32_Processor
-    $numSockets = ($procInfo | Measure-Object).Count
-    $numCores = ($procInfo | Measure-Object -Property NumberOfCores -Sum).Sum
-    $numLogicalProcessors = ($procInfo | Measure-Object -Property NumberOfLogicalProcessors -Sum).Sum
-    $compInfo | Select-Object CsDNSHostName, CsManufacturer, CsModel, @{N='CPUs (Sockets)';E={$numSockets}}, @{N='Nucleos Fisicos';E={$numCores}}, @{N='Nucleos Logicos (Hilos)';E={$numLogicalProcessors}}, CsTotalPhysicalMemory, OsName, OsVersion, OsLastBootUpTime | Format-List
+    $compInfo | Select-Object CsDNSHostName, CsManufacturer, CsModel, @{N='CPUs (Sockets)';E={$cpuInfo.NumSockets}}, @{N='Nucleos Fisicos';E={$cpuInfo.NumCores}}, @{N='Nucleos Logicos (Hilos)';E={$cpuInfo.NumLogicalProcessors}}, CsTotalPhysicalMemory, OsName, OsVersion, OsLastBootUpTime | Format-List
 }
 
 function Show-SystemShutdownHistory {
@@ -38,16 +34,20 @@ function Show-SystemShutdownHistory {
 
         if ($events) {
             $eventData = foreach ($event in $events) {
-                $description = switch ($event.Id) {
-                    1074 { 
-                        $processName = $event.Properties[0].Value
-                        $reason = $event.Properties[4].Value
-                        "Iniciado por Proceso/Usuario: '$processName' - Razon: $reason"
+                $description = try {
+                    switch ($event.Id) {
+                        1074 {
+                            $processName = $event.Properties[0].Value
+                            $reason = $event.Properties[4].Value
+                            "Iniciado por Proceso/Usuario: '$processName' - Razon: $reason"
+                        }
+                        6006 { "Apagado limpio del sistema" }
+                        6005 { "Encendido del sistema" }
+                        41   { "CRITICO: El sistema se reinicio sin un apagado limpio (Crash / Corte de energia)" }
+                        default { ($event.Message -split '(?:\r?\n)')[0] }
                     }
-                    6006 { "Apagado limpio del sistema" }
-                    6005 { "Encendido del sistema" }
-                    41   { "CRITICO: El sistema se reinicio sin un apagado limpio (Crash / Corte de energia)" }
-                    default { ($event.Message -split '(?:\r?\n)')[0] }
+                } catch {
+                    ($event.Message -split '(?:\r?\n)')[0]
                 }
                 [PSCustomObject]@{
                     Fecha       = $event.TimeCreated
@@ -116,10 +116,15 @@ function Show-NetworkInfo {
         if ($tcpConnections) { $tcpConnections | Select-Object LocalAddress,LocalPort,RemoteAddress,RemotePort,@{N="Proceso";E={(Get-Process -Id $_.OwningProcess -EA 0).ProcessName}} | Format-Table -AutoSize -Wrap }
         else { Write-Host "     No hay conexiones TCP establecidas." -ForegroundColor DarkGray }
         
-        Write-Host "`n  >> Puertos en Escucha (Listeners)" -ForegroundColor Cyan
+        Write-Host "`n  >> Puertos TCP en Escucha (Listeners)" -ForegroundColor Cyan
         $listeners = Get-NetTCPConnection -State Listen -ErrorAction Stop
         if ($listeners) { $listeners | Select-Object LocalAddress,LocalPort,@{N="Proceso";E={(Get-Process -Id $_.OwningProcess -EA 0).ProcessName}} | Sort-Object LocalPort | Format-Table -AutoSize -Wrap }
         else { Write-Host "     No hay puertos TCP en escucha." -ForegroundColor DarkGray }
+
+        Write-Host "`n  >> Puertos UDP en Escucha" -ForegroundColor Cyan
+        $udpListeners = Get-NetUDPEndpoint -ErrorAction Stop
+        if ($udpListeners) { $udpListeners | Select-Object LocalAddress,LocalPort,@{N="Proceso";E={(Get-Process -Id $_.OwningProcess -EA 0).ProcessName}} | Sort-Object LocalPort | Format-Table -AutoSize -Wrap }
+        else { Write-Host "     No hay puertos UDP en escucha." -ForegroundColor DarkGray }
     } catch { Write-Warning "No se pudo obtener la informacion de red." }
 }
 
@@ -145,11 +150,10 @@ function Show-PersistenceInfo {
     } catch { Write-Warning "No se pudo obtener la informacion de persistencia." }
 }
 
-function Show-ForensicSummary {
-    param($topProcesses, $compInfo, [switch]$CalcularHash)
-    
+function Get-ForensicSummary {
+    param($topProcesses, $compInfo, $numLogicalProcessors, [switch]$CalcularHash)
+
     $procPerf = Get-CimInstance -ClassName Win32_PerfFormattedData_PerfProc_Process
-    $numLogicalProcessors = (Get-CimInstance Win32_Processor | Measure-Object -Property NumberOfLogicalProcessors -Sum).Sum
     $cpuPerfHashTable = $procPerf | Where-Object { $_.Name -ne "_Total" } | Group-Object -Property IDProcess -AsHashTable -AsString
     
     $reportData = [System.Collections.Generic.List[psobject]]::new()
@@ -182,14 +186,13 @@ function Show-ForensicSummary {
 }
 
 function Show-InterpretiveAnalysis {
-    param($reportData, $allProcesses, $compInfo, $services, $tasks)
+    param($reportData, $allProcesses, $compInfo, $services, $tasks, $cpuInfo)
     Write-Host "`n--- 10. Analisis Interpretativo (Estilo Reporte) ---" -ForegroundColor Yellow
     Write-Host "----------------------------------------------------" -ForegroundColor DarkGray
-    $procInfo = Get-CimInstance Win32_Processor
-    $numSockets = ($procInfo | Measure-Object).Count
-    $numCores = ($procInfo | Measure-Object -Property NumberOfCores -Sum).Sum
-    $numLogicalProcessors = ($procInfo | Measure-Object -Property NumberOfLogicalProcessors -Sum).Sum
-    
+    $numSockets = $cpuInfo.NumSockets
+    $numCores = $cpuInfo.NumCores
+    $numLogicalProcessors = $cpuInfo.NumLogicalProcessors
+
     $totalPerf = Get-CimInstance -ClassName Win32_PerfFormattedData_PerfOS_Processor | Where-Object { $_.Name -eq '_Total' }
     $topProcessOverall = $reportData | Sort-Object 'Uso CPU Actual (%)' -Descending | Select-Object -First 1
 
@@ -249,7 +252,7 @@ try {
 
 "@
     Write-Host $banner -ForegroundColor Cyan
-    Write-Host "                       by Hassan MAdrid (https://github.com/HassanMadrid05/Powershell)" -ForegroundColor White
+    Write-Host "                       by Hassan Madrid (https://github.com/HassanMadrid05/Powershell)" -ForegroundColor White
     Write-Host
 
     Write-Host "Iniciando recopilacion de datos..." -ForegroundColor Yellow
@@ -264,8 +267,15 @@ try {
     $thirdPartyServices = $null
     $activeTasks = $null
 
-    Show-SystemInfo -compInfo $compInfo
-    
+    $procInfo = Get-CimInstance Win32_Processor
+    $cpuInfo = [PSCustomObject]@{
+        NumSockets           = ($procInfo | Measure-Object).Count
+        NumCores             = ($procInfo | Measure-Object -Property NumberOfCores -Sum).Sum
+        NumLogicalProcessors = ($procInfo | Measure-Object -Property NumberOfLogicalProcessors -Sum).Sum
+    }
+
+    Show-SystemInfo -compInfo $compInfo -cpuInfo $cpuInfo
+
     Show-SystemShutdownHistory
     Show-CpuPerCoreUsage
     Show-TopProcesses -sortedProcesses $sortedProcesses
@@ -278,12 +288,12 @@ try {
     Show-PersistenceInfo -services $thirdPartyServices -tasks $activeTasks
     
     Write-Host "`n--- 9. Resumen Ejecutivo y Analisis Forense ---" -ForegroundColor Yellow
-    $forensicData = Show-ForensicSummary -topProcesses $top10ProcessesForAnalysis -compInfo $compInfo -CalcularHash
-    
+    $forensicData = Get-ForensicSummary -topProcesses $top10ProcessesForAnalysis -compInfo $compInfo -numLogicalProcessors $cpuInfo.NumLogicalProcessors -CalcularHash
+
     $tablaFormateada = $forensicData | Format-Table -AutoSize -Wrap -Property Nombre, PID, 'Uso CPU Actual (%)', 'Uso Memoria (%)', 'Ruta del Ejecutable', 'Hash SHA256' | Out-String
     Write-Host $tablaFormateada
 
-    Show-InterpretiveAnalysis -reportData $forensicData -allProcesses $processes -compInfo $compInfo -services $thirdPartyServices -tasks $activeTasks
+    Show-InterpretiveAnalysis -reportData $forensicData -allProcesses $processes -compInfo $compInfo -services $thirdPartyServices -tasks $activeTasks -cpuInfo $cpuInfo
 
     Write-Host "`n--- Analisis finalizado ---" -ForegroundColor Green
 }
